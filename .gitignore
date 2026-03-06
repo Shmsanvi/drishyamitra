@@ -16,3 +16,5 @@ frontend/build/
 *.log
 frontend/node_modules/
 backend/venv/
+frontend/node_modules/
+backend/venv/
