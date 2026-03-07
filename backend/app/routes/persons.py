@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app import db
 from app.models.models import Person, Photo, PhotoPerson
-from app.services.face_service import extract_faces_and_embeddings, crop_face
+from app.services.face_service import extract_faces_and_embeddings, crop_face, identify_person
 import os, uuid
 
 persons_bp = Blueprint('persons', __name__)
@@ -26,40 +26,86 @@ def label_face():
     data = request.get_json()
     name = data.get('name')
     photo_id = data.get('photo_id')
-    
+
     if not name or not photo_id:
         return jsonify({'error': 'Name and photo_id required'}), 400
-    
+
     photo = Photo.query.filter_by(id=photo_id, user_id=user_id).first_or_404()
     faces = extract_faces_and_embeddings(photo.file_path)
-    
+
     if not faces:
         return jsonify({'error': 'No faces found in photo'}), 400
-    
+
     embedding = faces[0].get('embedding')
     facial_area = faces[0].get('facial_area', {})
-    
+
+    # Create or update person
     person = Person.query.filter_by(user_id=user_id, name=name).first()
     if not person:
         person = Person(name=name, user_id=user_id)
         db.session.add(person)
-    
+
     person.set_embedding(embedding)
-    
+
+    # Save thumbnail
     thumb_dir = os.path.join('uploads', str(user_id), 'thumbnails')
     os.makedirs(thumb_dir, exist_ok=True)
     thumb_path = os.path.join(thumb_dir, f'{uuid.uuid4()}.jpg')
     crop_face(photo.file_path, facial_area, thumb_path)
     person.thumbnail_path = thumb_path
-    
+
+    # Link this photo to person
     existing = PhotoPerson.query.filter_by(photo_id=photo.id, person_id=person.id).first()
     if not existing:
         pp = PhotoPerson(photo_id=photo.id, person_id=person.id, confidence=1.0)
         db.session.add(pp)
         photo.add_tag(name)
-    
+
+    db.session.flush()
+
+    # Auto-scan ALL existing photos for this person
+    all_photos = Photo.query.filter_by(user_id=user_id).all()
+    auto_tagged = 0
+
+    for existing_photo in all_photos:
+        if existing_photo.id == photo.id:
+            continue
+
+        # Skip if already linked
+        already_linked = PhotoPerson.query.filter_by(
+            photo_id=existing_photo.id,
+            person_id=person.id
+        ).first()
+        if already_linked:
+            continue
+
+        try:
+            photo_faces = extract_faces_and_embeddings(existing_photo.file_path)
+            for face_data in photo_faces:
+                face_embedding = face_data.get('embedding')
+                if face_embedding:
+                    matched_person, distance = identify_person(face_embedding, [person])
+                    if matched_person:
+                        pp = PhotoPerson(
+                            photo_id=existing_photo.id,
+                            person_id=person.id,
+                            confidence=1 - distance
+                        )
+                        db.session.add(pp)
+                        existing_photo.add_tag(name)
+                        auto_tagged += 1
+                        break
+        except Exception as e:
+            print(f"Error scanning photo {existing_photo.id}: {e}")
+            continue
+
     db.session.commit()
-    return jsonify({'message': f'Labeled as {name}', 'person_id': person.id}), 201
+
+    return jsonify({
+        'message': f'Labeled as {name}! Auto-tagged in {auto_tagged} additional photos.',
+        'person_id': person.id,
+        'auto_tagged': auto_tagged
+    }), 201
 
 @persons_bp.route('/<int:person_id>', methods=['DELETE'])
 @jwt_required()

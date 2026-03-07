@@ -6,7 +6,7 @@ from PIL import Image
 
 MODEL_NAME = "Facenet512"
 DETECTOR = "opencv"
-THRESHOLD = 0.4
+THRESHOLD = 0.6
 
 def extract_faces_and_embeddings(image_path):
     try:
