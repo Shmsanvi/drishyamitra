@@ -26,6 +26,7 @@ def label_face():
     data = request.get_json()
     name = data.get('name')
     photo_id = data.get('photo_id')
+    face_index = data.get('face_index', 0)
 
     if not name or not photo_id:
         return jsonify({'error': 'Name and photo_id required'}), 400
@@ -36,10 +37,11 @@ def label_face():
     if not faces:
         return jsonify({'error': 'No faces found in photo'}), 400
 
-    embedding = faces[0].get('embedding')
-    facial_area = faces[0].get('facial_area', {})
+    # Use the specified face index
+    face_idx = min(face_index, len(faces) - 1)
+    embedding = faces[face_idx].get('embedding')
+    facial_area = faces[face_idx].get('facial_area', {})
 
-    # Create or update person
     person = Person.query.filter_by(user_id=user_id, name=name).first()
     if not person:
         person = Person(name=name, user_id=user_id)
@@ -47,14 +49,12 @@ def label_face():
 
     person.set_embedding(embedding)
 
-    # Save thumbnail
     thumb_dir = os.path.join('uploads', str(user_id), 'thumbnails')
     os.makedirs(thumb_dir, exist_ok=True)
     thumb_path = os.path.join(thumb_dir, f'{uuid.uuid4()}.jpg')
     crop_face(photo.file_path, facial_area, thumb_path)
     person.thumbnail_path = thumb_path
 
-    # Link this photo to person
     existing = PhotoPerson.query.filter_by(photo_id=photo.id, person_id=person.id).first()
     if not existing:
         pp = PhotoPerson(photo_id=photo.id, person_id=person.id, confidence=1.0)
@@ -63,22 +63,16 @@ def label_face():
 
     db.session.flush()
 
-    # Auto-scan ALL existing photos for this person
+    # Auto-scan all existing photos
     all_photos = Photo.query.filter_by(user_id=user_id).all()
     auto_tagged = 0
 
     for existing_photo in all_photos:
         if existing_photo.id == photo.id:
             continue
-
-        # Skip if already linked
-        already_linked = PhotoPerson.query.filter_by(
-            photo_id=existing_photo.id,
-            person_id=person.id
-        ).first()
+        already_linked = PhotoPerson.query.filter_by(photo_id=existing_photo.id, person_id=person.id).first()
         if already_linked:
             continue
-
         try:
             photo_faces = extract_faces_and_embeddings(existing_photo.file_path)
             for face_data in photo_faces:
@@ -86,11 +80,7 @@ def label_face():
                 if face_embedding:
                     matched_person, distance = identify_person(face_embedding, [person])
                     if matched_person:
-                        pp = PhotoPerson(
-                            photo_id=existing_photo.id,
-                            person_id=person.id,
-                            confidence=1 - distance
-                        )
+                        pp = PhotoPerson(photo_id=existing_photo.id, person_id=person.id, confidence=1-distance)
                         db.session.add(pp)
                         existing_photo.add_tag(name)
                         auto_tagged += 1
