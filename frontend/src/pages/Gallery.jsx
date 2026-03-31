@@ -9,7 +9,7 @@ export default function Gallery() {
   const [selected, setSelected] = useState(null);
   const [labelNames, setLabelNames] = useState({});
   const [labelMsg, setLabelMsg] = useState('');
-  const [faces, setFaces] = useState([]);
+ 
 
   useEffect(() => {
     loadPhotos();
