@@ -36,7 +36,6 @@ export default function Gallery() {
   const handleSelectPhoto = (photo) => {
     if (selected?.id === photo.id) {
       setSelected(null);
-      setFaces([]);
       return;
     }
     setSelected(photo);
